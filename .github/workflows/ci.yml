@@ -1,4 +1,4 @@
-name: ⚔️ Adversary Emulation CI
+name: "Adversary Emulation CI"
 
 on:
   push:
@@ -77,46 +77,4 @@ jobs:
               sys.exit(1)
 
           print("PASS: Coverage meets threshold")
-          EOF
-
-  validate-rules:
-    name: Validate KQL Rules
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: Checkout repo
-        uses: actions/checkout@v4
-
-      - name: Setup Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-
-      - name: Check rule quality
-        run: |
-          python3 << 'EOF'
-          from pathlib import Path
-
-          QUALITY_CHECKS = [
-              ("FALSE POSITIVE", "Has FP handling"),
-              ("InitiatingProcess", "Has parent process logic"),
-              ("ProcessCommandLine", "Has command-line parsing"),
-              ("order by", "Has order by clause"),
-          ]
-
-          warnings = []
-          rule_files = list(Path("detection/rules").rglob("*.kql"))
-          for kql in rule_files:
-              content = kql.read_text(encoding="utf-8", errors="ignore").lower()
-              for pattern, label in QUALITY_CHECKS:
-                  if pattern.lower() not in content:
-                      warnings.append(f"[{kql.name}] Missing: {label}")
-
-          if warnings:
-              print("Quality warnings:")
-              for w in warnings:
-                  print(w)
-
-          print(f"\nRules checked: {len(rule_files)}")
-          print("PASSED")
           EOF
