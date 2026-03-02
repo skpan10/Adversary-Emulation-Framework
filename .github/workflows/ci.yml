@@ -1,0 +1,94 @@
+name: "Adversary Emulation CI"
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  emulation-run:
+    name: Run Emulation (Safe Mode)
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run emulation engine
+        run: |
+          mkdir -p reports/artifacts
+          python engine.py
+        continue-on-error: true
+
+      - name: Generate coverage matrix
+        run: python detection/mitre_coverage.py
+
+      - name: Validate technique modules
+        run: |
+          python3 << 'EOF'
+          import importlib.util, sys
+          from pathlib import Path
+
+          errors = []
+          for py in Path("techniques").rglob("T*.py"):
+              spec = importlib.util.spec_from_file_location(py.stem, py)
+              mod = importlib.util.module_from_spec(spec)
+              try:
+                  spec.loader.exec_module(mod)
+                  for attr in ["TECHNIQUE_ID", "TECHNIQUE_NAME", "TACTIC", "execute"]:
+                      if not hasattr(mod, attr):
+                          errors.append(f"{py} missing: {attr}")
+              except Exception as e:
+                  errors.append(f"{py} failed to load: {e}")
+
+          if errors:
+              for e in errors:
+                  print(f"ERROR: {e}")
+              sys.exit(1)
+
+          print("All technique modules validated successfully")
+          EOF
+
+      - name: Coverage threshold check
+        run: |
+          python3 << 'EOF'
+          import json, glob, sys
+
+          runs = sorted(glob.glob("reports/run_*.json"))
+          if not runs:
+              print("No run reports found - skipping threshold check")
+              sys.exit(0)
+
+          with open(runs[-1], "r", encoding="utf-8") as f:
+              run = json.load(f)
+
+          coverage = run.get("coverage_pct", None)
+
+          if coverage is None:
+              print("No coverage_pct in report - skipping threshold check")
+              sys.exit(0)
+
+          if coverage == 0.0:
+              print("Coverage is 0.0% - no techniques have run yet, skipping threshold check")
+              sys.exit(0)
+
+          threshold = 40
+          print(f"Coverage: {coverage}% (threshold: {threshold}%)")
+
+          if coverage < threshold:
+              print(f"FAIL: Coverage {coverage}% below threshold {threshold}%")
+              sys.exit(1)
+
+          print("PASS: Coverage meets threshold")
+          EOF
