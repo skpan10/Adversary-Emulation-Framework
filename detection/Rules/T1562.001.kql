@@ -1,0 +1,39 @@
+
+// T1562.001 - Defense Impairment Detection
+// Critical severity — very low FP rate
+// FALSE POSITIVE REDUCTION:
+//   - Nearly zero legitimate use cases for disabling real-time protection
+//   - Flag any account except SYSTEM performing these actions
+//   - Alert immediately, no scoring threshold needed
+
+let DefenseImpairCmds = dynamic([
+    "DisableRealtimeMonitoring","DisableBehaviorMonitoring",
+    "DisableIOAVProtection","DisableScriptScanning",
+    "wevtutil cl","auditpol /set"
+]);
+let SecurityServices = dynamic(["WinDefend","MsMpSvc","Sense","SecurityHealthService"]);
+
+// Signal 1: PowerShell disabling Defender
+DeviceProcessEvents
+| where FileName in~ ("powershell.exe","pwsh.exe")
+| where ProcessCommandLine has_any (DefenseImpairCmds)
+| extend AlertType = "PowerShell_Defense_Disable"
+| union (
+    // Signal 2: sc.exe stopping security services
+    DeviceProcessEvents
+    | where FileName =~ "sc.exe"
+    | where ProcessCommandLine has_any ("stop","delete","disabled")
+    | where ProcessCommandLine has_any (SecurityServices)
+    | extend AlertType = "SC_Security_Service_Stop"
+) | union (
+    // Signal 3: Event log clearing
+    DeviceProcessEvents
+    | where FileName =~ "wevtutil.exe"
+    | where ProcessCommandLine has_any ("cl ","clear-log")
+    | where ProcessCommandLine has_any ("Security","System","Application")
+    | extend AlertType = "EventLog_Cleared"
+)
+| where AccountName != "SYSTEM"  // Filter pure system operations
+| project TimeGenerated, DeviceName, AccountName,
+    AlertType, ProcessCommandLine, InitiatingProcessFileName, SHA256
+| order by TimeGenerated desc

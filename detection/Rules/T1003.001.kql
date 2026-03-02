@@ -1,0 +1,33 @@
+
+// T1003.001 - LSASS Memory Access / Credential Dumping
+// CRITICAL severity — very low FP rate with proper exclusions
+// FALSE POSITIVE REDUCTION:
+//   - Excludes AV/EDR products by process name
+//   - Excludes WerFault (crash dumps)
+//   - Excludes System32 signed binaries
+//   - Scores by tool name match + command line + parent
+
+let KnownDumpTools = dynamic(["mimikatz","procdump","nanodump","dumpert","safetydump"]);
+let FPExcluded = dynamic(["MsMpEng.exe","WerFault.exe","csrss.exe"]);
+let FPPaths = dynamic(["C:\\Windows\\System32\\","C:\\Program Files\\Windows Defender\\"]);
+
+DeviceProcessEvents
+| where FileName has_any (KnownDumpTools)
+    or ProcessCommandLine has_any ("lsass","minidump","comsvcs.dll","sekurlsa","logonpasswords")
+| where InitiatingProcessFileName !in~ (FPExcluded)
+| where not(FolderPath has_any (FPPaths))
+| extend
+    IsKnownTool = FileName has_any (KnownDumpTools),
+    HasLsassRef = ProcessCommandLine has "lsass",
+    HasMiniDump = ProcessCommandLine has_any ("minidump","MiniDump","comsvcs"),
+    IsSigned = isnotempty(ProcessVersionInfoCompanyName)
+| extend RiskScore =
+    toint(IsKnownTool) * 5 +
+    toint(HasLsassRef) * 3 +
+    toint(HasMiniDump) * 3 +
+    toint(not(IsSigned)) * 2
+| where RiskScore >= 5
+| project TimeGenerated, DeviceName, AccountName,
+    FileName, ProcessCommandLine, InitiatingProcessFileName,
+    RiskScore, IsKnownTool, HasLsassRef, SHA256
+| order by RiskScore desc
