@@ -1,0 +1,31 @@
+
+// T1059.001 - PowerShell Execution with Suspicious Indicators
+// FALSE POSITIVE REDUCTION:
+//   - Excludes known software installer parents (msiexec, TrustedInstaller)
+//   - Excludes signed IT automation scripts
+//   - Requires encoded command OR suspicious parent process (not just PowerShell spawn)
+
+let SuspiciousParents = dynamic(["winword.exe","excel.exe","outlook.exe","mshta.exe","wscript.exe"]);
+let FPExcludedParents = dynamic(["msiexec.exe","TrustedInstaller.exe"]);
+let FPExcludedCmdPatterns = dynamic(["WindowsUpdate","MicrosoftUpdate"]);
+
+DeviceProcessEvents
+| where FileName =~ "powershell.exe" or FileName =~ "pwsh.exe"
+| where InitiatingProcessFileName !in~ (FPExcludedParents)
+| where not(ProcessCommandLine has_any (FPExcludedCmdPatterns))
+| extend
+    HasEncodedCmd = ProcessCommandLine has_any ("-enc","-encodedcommand","FromBase64String"),
+    HasSuspiciousParent = InitiatingProcessFileName in~ (SuspiciousParents),
+    HasNetworkDownload = ProcessCommandLine has_any ("DownloadString","WebClient","Invoke-WebRequest"),
+    HasPolicyBypass = ProcessCommandLine has_any ("bypass","unrestricted","-nop")
+| extend SuspiciousScore =
+    toint(HasEncodedCmd) * 3 +
+    toint(HasSuspiciousParent) * 3 +
+    toint(HasNetworkDownload) * 2 +
+    toint(HasPolicyBypass) * 1
+| where SuspiciousScore >= 3
+| project TimeGenerated, DeviceName, AccountName,
+    ProcessCommandLine, InitiatingProcessFileName,
+    HasEncodedCmd, HasSuspiciousParent, HasNetworkDownload,
+    SuspiciousScore, SHA256
+| order by SuspiciousScore desc

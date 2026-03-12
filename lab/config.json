@@ -1,0 +1,11 @@
+{
+  "operator": "detection-engineer",
+  "safe_mode": true,
+  "detection_validation": true,
+  "report_format": ["json", "html"],
+  "excluded_techniques": [],
+  "lab_notes": "Safe mode enabled — all techniques simulate artifacts without actual execution",
+  "mitre_navigator_export": true,
+  "coverage_threshold_warning": 60,
+  "coverage_threshold_fail": 40
+}

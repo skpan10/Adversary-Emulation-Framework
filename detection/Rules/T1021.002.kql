@@ -1,0 +1,40 @@
+
+// T1021.002 - SMB Lateral Movement via Admin Shares
+// FALSE POSITIVE REDUCTION:
+//   - Exclude known IT admin/service accounts
+//   - Exclude known RMM and backup software
+//   - Require admin share + either PsExec tool OR new service within 5min
+//   - Flag non-admin accounts authenticating to C$ / ADMIN$
+
+let AdminShares = dynamic(["C$","ADMIN$","IPC$"]);
+let LateralTools = dynamic(["psexec","paexec","remcom","csexec"]);
+let FPServiceAccounts = dynamic(["svc-backup","svc-patch","svc-deploy"]);
+let FPProcesses = dynamic(["TeamViewer.exe","ConnectWiseControl.exe","BackupExec.exe"]);
+
+// Signal 1: Admin share authentication
+let AdminShareAuth =
+    DeviceNetworkEvents
+    | where RemotePort == 445
+    | where ActionType == "ConnectionSuccess"
+    | where InitiatingProcessFileName !in~ (FPProcesses)
+    | where AccountName !in~ (FPServiceAccounts)
+    | project DeviceName, AccountName, RemoteIP,
+        AuthTime = TimeGenerated, InitiatingProcessFileName;
+
+// Signal 2: PsExec / lateral tool usage
+let LateralToolUsage =
+    DeviceProcessEvents
+    | where FileName has_any (LateralTools)
+        or ProcessCommandLine has_any (AdminShares)
+    | project DeviceName, AccountName,
+        ToolTime = TimeGenerated, FileName, ProcessCommandLine;
+
+// Correlate: same device + same account within 10 min
+AdminShareAuth
+| join kind=inner LateralToolUsage on DeviceName, AccountName
+| where abs(datetime_diff('minute', ToolTime, AuthTime)) <= 10
+| extend LateralMovementConfidence = "HIGH"
+| project AuthTime, DeviceName, AccountName,
+    TargetIP = RemoteIP, LateralTool = FileName,
+    CommandLine = ProcessCommandLine, LateralMovementConfidence
+| order by AuthTime desc

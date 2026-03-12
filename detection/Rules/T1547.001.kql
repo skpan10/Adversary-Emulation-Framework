@@ -1,0 +1,37 @@
+
+// T1547.001 - Registry Run Key Persistence
+// HIGH false positive risk — many legitimate apps use Run keys
+// FALSE POSITIVE REDUCTION:
+//   - Only flag values pointing to user-writable/temp paths
+//   - Exclude known software vendor registry values
+//   - Require suspicious path OR encoded command in value data
+//   - Exclude writes from signed installer processes
+
+let RunKeys = dynamic([
+    "\\CurrentVersion\\Run",
+    "\\CurrentVersion\\RunOnce"
+]);
+let SuspiciousPaths = dynamic(["\\AppData\\Roaming\\","\\Temp\\","\\Downloads\\"]);
+let FPExcludedValues = dynamic(["OneDrive","Teams","Discord","Slack","Dropbox","GoogleDrive"]);
+let FPExcludedParents = dynamic(["msiexec.exe","TrustedInstaller.exe","setup.exe"]);
+
+DeviceRegistryEvents
+| where RegistryKey has_any (RunKeys)
+| where ActionType in ("RegistryValueSet","RegistryKeyCreated")
+| where RegistryValueData has_any (SuspiciousPaths)
+    or RegistryValueData has_any ("powershell","cmd /c","wscript","base64","-enc")
+| where RegistryValueName !in~ (FPExcludedValues)
+| where InitiatingProcessFileName !in~ (FPExcludedParents)
+| extend
+    PointsToTempPath = RegistryValueData has_any (SuspiciousPaths),
+    HasEncodedPayload = RegistryValueData has_any ("base64","-enc","FromBase64"),
+    UsesScriptHost = RegistryValueData has_any ("wscript","cscript","mshta")
+| extend PersistenceRiskScore =
+    toint(PointsToTempPath) * 3 +
+    toint(HasEncodedPayload) * 4 +
+    toint(UsesScriptHost) * 3
+| where PersistenceRiskScore >= 3
+| project TimeGenerated, DeviceName, AccountName,
+    RegistryKey, RegistryValueName, RegistryValueData,
+    InitiatingProcessFileName, PersistenceRiskScore
+| order by PersistenceRiskScore desc
